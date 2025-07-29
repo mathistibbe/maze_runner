@@ -9,7 +9,8 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
-        ("share/" + package_name + "/launch", ["launch/maze_runner_launch.py"]),
+        ("share/" + package_name + "/launch", ["launch/maze_runner.launch.py"]),
+        ("share/" + package_name + "/launch", ["launch/robot.launch.py"]),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
