@@ -7,7 +7,7 @@ from aruco_interfaces.msg import ArucoMarkers
 from geometry_msgs.msg import Pose, Point
 from nav_msgs.msg import OccupancyGrid
 from .map_creation import create_mapping, MazeMap
-from .pathfinding import visualize_path, a_star
+from .pathfinding import visualize_path, a_star, b_star, c_star, reduce_path_to_straights
 import math
 import numpy as np
 from rclpy.qos import qos_profile_sensor_data
@@ -41,7 +41,9 @@ class MovementPlanner(Node):
         self.obstacle_positions = []
         self.maze_map = None
         self.robot_index = None
-        timer_period = 5  # seconds
+        self.path = None
+        self.steps = 0
+        timer_period = 2  # seconds
         self.timer = self.create_timer(timer_period, self.test_grid)
 
     def _get_yaw_from_quaternion(self, q):
@@ -50,31 +52,46 @@ class MovementPlanner(Node):
         cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
         return math.atan2(siny_cosp, cosy_cosp)
 
-    def position_to_grid_coordinates(self, position, grid_map):
+    def position_to_grid_coordinates(self, position, maze_map):
+        """Convert a position to grid coordinates based on the map's origin and resolution.
+        Args:
+            position (Point): The position in the world frame.
+            grid_map (OccupancyGrid): The occupancy grid map.
+        Returns:
+            tuple: The grid coordinates (x, y)."""
         x = int(
-            (position.x - grid_map.info.origin.position.x) / grid_map.info.resolution
+            (abs(position.x) - maze_map.origin.position.x) / maze_map.resolution
         )
         y = int(
-            (position.y - grid_map.info.origin.position.y) / grid_map.info.resolution
+            (abs(position.y) - maze_map.origin.position.y) / maze_map.resolution
         )
         return x, y
 
-    def grid_coordinates_to_position(self, x, y, grid_map):
+    def grid_coordinates_to_position(self, x, y, maze_map):
+        """ Convert grid coordinates to a position in the world frame.
+        Args:
+            x (int): The x coordinate in the grid.
+            y (int): The y coordinate in the grid.
+            grid_map (OccupancyGrid): The occupancy grid map.
+        Returns:
+            Point: The position in the world frame.
+        """
         position = Point()
         position.x = (
-            grid_map.info.origin.position.x
-            + x * grid_map.info.resolution
-            + grid_map.info.resolution / 2
+            maze_map.origin.position.x
+            + x * maze_map.resolution
+            + maze_map.resolution / 2
         )
         position.y = (
-            grid_map.info.origin.position.y
-            + y * grid_map.info.resolution
-            + grid_map.info.resolution / 2
+            maze_map.origin.position.y
+            + y * maze_map.resolution
+            + maze_map.resolution / 2
         )
         position.z = 0.0
         return position
 
     def grid_cb(self, msg):
+        """Callback for the occupancy grid map."""
         if self.maze_map is None:
             self.get_logger().info("In grid_cb")
             self.destroy_subscription(self.grid_sub)
@@ -101,18 +118,9 @@ class MovementPlanner(Node):
     def obstacle_marker_cb(self, msg):
         self.obstacle_positions = [marker.pose.position for marker in msg.markers]
 
-    def test_static_path(self):
-        """Test the movement controll path following by sending a predefined path"""
-        path = [(x, 0) for x in range(10)]
-        path = path + [(9, y) for y in range(1, 10)]
-        path = path + [(x, 9) for x in range(10, 20)]
-        self.get_logger().info(str(path))
-        self.timer.cancel()
-        self.path_pub.publish(self.generate_path_msg(path))
-
     def feedback_callback(self, feedback_msg):
         distance = feedback_msg.feedback.distance_remaining
-        self.get_logger().info(f"Distance remaining: {distance:.2f}")
+        #self.get_logger().info(f"Distance remaining: {distance:.2f}")
 
     def goal_response_callback(self, future):
         goal_handle = future.result()
@@ -129,43 +137,68 @@ class MovementPlanner(Node):
         self.get_logger().info(
             f"Result: success={result.success}, message={result.message}"
         )
+        if result.success:
+            if self.steps >= len(self.path):
+                self.get_logger().info("Reached the goal successfully!")
+            else:
+                self.send_goal_to_action_server()
 
     def test_grid(self):
         """Tests the visualization of Maze Maps that are created from occupancy grids."""
-        if self.maze_map is not None:
+        if self.maze_map is not None and self.robot_pos is not None and self.goal_pos is not None:
             self.timer.cancel()
-            start = (20, 20)
-            goal = (200, 200)
+            start = self.position_to_grid_coordinates(self.robot_pos, self.maze_map)
+            goal = self.position_to_grid_coordinates(self.goal_pos, self.maze_map)
 
-            path = a_star(maze=self.maze_map.map, start=start, goal=goal)
+            #start = (30,60)
+            #goal = (230, 200)
+
+            self.get_logger().info(f"Start: {start}, Goal: {goal}")
+
+            path = b_star(maze=self.maze_map.map, start=start, goal=goal)
+            if path is None:
+                path = []
+            reduced_path = reduce_path_to_straights(path)
             self.get_logger().info("Computed Shortest Path")
-            # visualize_path(self.maze_map.map, path, start, goal)
+            self.get_logger().info(f"Path: {path}")
+            
+            visualize_path(self.maze_map.map, reduced_path, start, goal)
 
-            #path_msg = self.generate_path_msg(path)
-            #self.path_pub.publish(path_msg)
-
-            # Convert grid to world coordinates
-            # goal_point = self.grid_coordinates_to_position(
-            #    goal[0], goal[1], self.maze_map.grid_msg
-            # )
 
             # Send goal to action server
+
+
             if not self._client.wait_for_server(timeout_sec=3.0):
                 self.get_logger().error("Action server not available.")
                 return
 
-            goal_msg = GoToPoint.Goal()
-            goal_msg.x = 1.0
-            goal_msg.y = 1.0
+            first_step = reduced_path[1]
+            
+            self.path = reduced_path
+            self.steps = 1
+            self.send_goal_to_action_server()
+            
+            
 
-            self.get_logger().info(
-                f"Sending action goal to: ({goal_msg.x:.2f}, {goal_msg.y:.2f})"
-            )
+                
+            
 
-            future = self._client.send_goal_async(
-                goal_msg, feedback_callback=self.feedback_callback
-            )
-            future.add_done_callback(self.goal_response_callback)
+    def send_goal_to_action_server(self):
+        """Sends the goal to the action server."""
+        goal_point = self.grid_coordinates_to_position(self.path[self.steps][0], self.path[self.steps][1], self.maze_map)
+        self.steps += 1
+        goal_msg = GoToPoint.Goal()
+        goal_msg.x = goal_point.x
+        goal_msg.y = goal_point.y
+
+        self.get_logger().info(f"Sending goal: {goal_msg.x}, {goal_msg.y}")
+        self._client.wait_for_server()
+        send_goal_future = self._client.send_goal_async(
+            goal_msg, feedback_callback=self.feedback_callback
+        )
+        send_goal_future.add_done_callback(self.goal_response_callback)
+
+            
 
     def generate_path_msg(self, path):
         indices = []

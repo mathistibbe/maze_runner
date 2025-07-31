@@ -8,14 +8,16 @@ class MazeMap:
 
     def __init__(self, occupancy_grid: OccupancyGrid):
         self.grid_msg = occupancy_grid
+        self.origin = occupancy_grid.info.origin
         self.creation_time = occupancy_grid.info.map_load_time
         self.resolution = occupancy_grid.info.resolution
         self.width = occupancy_grid.info.width
         self.height = occupancy_grid.info.height
-        self.map = np.reshape(occupancy_grid.data, (self.height, self.width))
+        self.map = np.reshape(occupancy_grid.data, (self.height, self.width)).T
         self.map[self.map > 0] = 0
         self.map[self.map < 0] = 1
         self.map = self.apply_custom_convolution(self.map)
+        self.downscale_map(factor = 10)
         # np.savetxt("maze.out",self.map)
 
     def apply_custom_convolution(self, arr):
@@ -43,6 +45,34 @@ class MazeMap:
 
         return output
 
+    def downscale_map(self, factor: int) -> np.ndarray:
+        """
+        Downscale a 2D array by an integer factor.
+        Pads the array if needed so dimensions are divisible by the factor.
+
+        Args:
+            factor (int): Downscaling factor.
+
+        Returns:
+            np.ndarray: Downscaled occupancy grid.
+        """
+
+
+        rows, cols = self.map.shape
+        pad_rows = (factor - rows % factor) % factor
+        pad_cols = (factor - cols % factor) % factor
+
+        # Pad with zeros (assuming padding is free space)
+        padded = np.pad(self.map, ((0, pad_rows), (0, pad_cols)), mode='constant', constant_values=0)
+
+        new_rows = padded.shape[0] // factor
+        new_cols = padded.shape[1] // factor
+
+        # Reshape and max-pool
+        reshaped = padded.reshape(new_rows, factor, new_cols, factor)
+        downscaled = reshaped.max(axis=(1, 3))
+        self.resolution *= factor
+        self.map = downscaled
 
 def create_mapping(robot_point, goal_point, obstacle_points):
     """Creates a map representing a 5,05m x 5,05m plane as an np.array. Blocking obstacles are represented by a 0

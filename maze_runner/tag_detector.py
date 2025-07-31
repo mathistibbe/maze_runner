@@ -24,7 +24,7 @@ class TagDetector(Node):
         super().__init__("tag_detector")
 
         self.robot_id = 4  # Our Robot
-        self.goal_id = 3  # Goal tag
+        self.goal_id = 15  # Goal tag
 
         # Publishers for robot, goal, and obstacles
         self.robot_pub = self.create_publisher(Pose, "robot_pose", 10)
@@ -54,11 +54,22 @@ class TagDetector(Node):
                 obstacles.append(marker)
 
         # Publish robot pose if detected
+
         if robot_marker is not None:
+            flipped_pose = Pose()
+            flipped_pose.position.x = robot_marker.pose.position.y
+            flipped_pose.position.y = robot_marker.pose.position.x 
+            flipped_pose.position.z = robot_marker.pose.position.z
+            flipped_pose.orientation = robot_marker.pose.orientation
             self.robot_pub.publish(robot_marker.pose)
 
         # Publish goal pose if detected
         if goal_marker is not None:
+            flipped_gpose = Pose()
+           # flipped_gpose.position.x = goal_marker.pose.position.y
+           # flipped_gpose.position.y = goal_marker.pose.position.x 
+           # flipped_gpose.position.z = goal_marker.pose.position.z
+           # flipped_gpose.orientation = goal_marker.pose.orientation
             self.goal_pub.publish(goal_marker.pose)
 
         # Publish obstacles if any

@@ -11,6 +11,9 @@ from geometry_msgs.msg import Twist
 from std_msgs.msg import Float32
 from geometry_msgs.msg import Quaternion
 from rclpy.executors import MultiThreadedExecutor
+from rclpy.qos import qos_profile_sensor_data
+import numpy as np
+
 import time
 
 
@@ -28,37 +31,46 @@ class GoToPointActionServer(Node):
             cancel_callback=self.cancel_callback,
         )
 
-        # Subscribe to position topic (Odometry or Pose)
-        self._current_pose = None
-        qos = QoSProfile(depth=10)
+        
+        # Robot pose subscription
         self.create_subscription(
-            Pose, "robot_pose", self.pose_callback, qos  # Replace with your topic
+            Pose, "robot_pose", self.pose_callback, 10
         )
+        self._current_pose = None
+        self._real_world_yaw = None
 
-        self.rotation_sub = self.create_subscription(  ##Gyro
-            Float32, "rotation", self.rotation_callback, 10
+
+        # Gyro rotation subscription
+        self.rotation_sub = self.create_subscription(
+            Float32, "rotation", self.rotation_callback, qos_profile_sensor_data
         )
         self.gyro_rotation = None
 
+        # Publisher for velocity commands
         self._cmd_vel_pub = self.create_publisher(Twist, "cmd", 10)
+        #self.rw_yaw_pub = self.create_publisher(Float32, "rw_yaw", 10)
+        #self.timer = self.create_timer(1, self.timer_cb)
 
-    def _get_yaw_from_quaternion(self, q: Quaternion):
-        x, y, z, w = q.x, q.y, q.z, q.w
-        siny_cosp = 2.0 * (w * z + x * y)
-        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-        return math.atan2(siny_cosp, cosy_cosp)
-
-    def _angle_diff(self, target, current):
-        diff = target - current
-        while diff > math.pi:
-            diff -= 2 * math.pi
-        while diff < -math.pi:
-            diff += 2 * math.pi
-        return diff
+    
+    def timer_cb(self):
+        if self._current_pose is not None:
+            yaw_msg = Float32()
+            
+            yaw_msg.data = self._get_yaw_from_quaternion(self._current_pose.orientation)
+            self.rw_yaw_pub.publish(yaw_msg)
 
     def pose_callback(self, msg: Pose):
         """Update the current robot pose from subscriber."""
-        self._current_pose = msg
+        new_yaw = self._get_yaw_from_quaternion(msg.orientation)
+        #self.get_logger().info(f"Current pose: {new_yaw}")
+        if self._real_world_yaw is None:
+            if -0.3 < new_yaw < 0.3:
+                self._current_pose = msg
+                self._real_world_yaw = new_yaw
+        else:
+            if abs(self._angle_diff(self._real_world_yaw, new_yaw))< 0.3:
+                self._current_pose = msg
+                self._real_world_yaw = new_yaw
 
     def rotation_callback(self, msg):
         """Update the current rotation from subscriber."""
@@ -74,91 +86,133 @@ class GoToPointActionServer(Node):
         self.get_logger().info("Received cancel request")
         return CancelResponse.ACCEPT
 
+    def _get_yaw_from_quaternion(self, q: Quaternion):
+        x, y, z, w = q.x, q.y, q.z, q.w
+        siny_cosp = 2.0 * (w * z + x * y)
+        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+        return math.atan2(siny_cosp, cosy_cosp)
+
+    def _angle_diff(self, target, current):
+        diff = target - current
+        while diff > math.pi:
+            diff -= 2 * math.pi
+        while diff < -math.pi:
+            diff += 2 * math.pi
+        return diff
+
     def normalize_angle(self, angle):
-        while angle > math.pi:
-            angle -= 2 * math.pi
-        while angle < -math.pi:
-            angle += 2 * math.pi
-        return angle
+        return np.arctan2(np.sin(angle),np.cos(angle))
+
+    def pos_calulation(self, target_x, target_y):
+        """Calculate the distance and angle to the target position."""
+        if self._current_pose is None:
+            return None, None
+
+        dx = target_x - self._current_pose.position.x
+        dy = target_y - self._current_pose.position.y
+        distance = math.hypot(dx, dy)
+        desired_yaw = math.atan2(-1*dx, dy)
+        self.get_logger().info(f"dx: {dx}, dy: {dy}, distance: {distance}, desired_yaw: {desired_yaw}")
+
+        #if distance > 0.5:
+            # self.get_logger().info(f"Distance threshold not met: {distance:.2f} > 0.3")
+        #    time.sleep(0.1)  # wait for the robot to stabilize
+        #    return self.pos_calulation(target_x, target_y)
+
+        return distance, desired_yaw
 
 
     def execute_callback(self, goal_handle):
-        """Main loop that drives robot to target."""
+        """Main loop that drives robot to target with separate rotation and translation phases."""
         self.get_logger().info("Executing goal...")
 
-        target_x = goal_handle.request.x
-        target_y = goal_handle.request.y
+        target_x = goal_handle.request.y
+        target_y = goal_handle.request.x
 
-        
         self.get_logger().warn("Waiting for gyro rotation and robot pose...")
-
+                        
         while self.gyro_rotation is None or self._current_pose is None:
             time.sleep(0.1)
 
-        real_world_yaw = self._get_yaw_from_quaternion(self._current_pose.orientation)
-
         
-        self.get_logger().info(f"Gyro rotation: {self.gyro_rotation}")
-
-        offset = self.normalize_angle(real_world_yaw - self.gyro_rotation)
+       
+        offset = self._angle_diff(target=self._real_world_yaw, current=self.gyro_rotation)
 
         feedback_msg = GoToPoint.Feedback()
         rate = 0.05
 
+        distance, desired_yaw = self.pos_calulation(target_x, target_y)
+        goal_gyro_yaw = desired_yaw - offset
+            
+        self.get_logger().info(f"Distance to goal: {distance:.2f}, Rotation: {self._angle_diff(goal_gyro_yaw, self.gyro_rotation):.2f}, Current gyro + Offset{self.normalize_angle(self.gyro_rotation + offset)}")
+
+        # --- Phase 1: Rotate to face the target ---
         while rclpy.ok():
             if goal_handle.is_cancel_requested:
                 self.get_logger().info("Goal canceled")
                 goal_handle.canceled()
                 return GoToPoint.Result(success=False, message="Goal canceled")
 
-            if self._current_pose is None:
-                self.get_logger().warn("Waiting for pose...")
-                time.sleep(rate)
-                continue
 
-            # Compute distance to goal
-            dx = target_x - self._current_pose.position.x
-            dy = target_y - self._current_pose.position.y
-            distance = math.hypot(dx, dy)
+            #current_yaw = self.normalize_angle(self.gyro_rotation + offset)
+            
+            
 
-            # Calculate current yaw
-            #q = self._current_pose.orientation
-            # current_yaw = self._get_yaw_from_quaternion(q)
-            current_yaw = self.normalize_angle(self.gyro_rotation + offset)
+            #feedback_msg.distance_remaining = distance
+            #goal_handle.publish_feedback(feedback_msg)
 
-            # Desired heading
-            desired_yaw = math.atan2(dy, dx)
-            yaw_error = self._angle_diff(desired_yaw, current_yaw)
+            # If facing the target (within threshold), break to next phase
 
-            # Publish feedback
-            feedback_msg.distance_remaining = distance
+            remaining_angle = self._angle_diff(goal_gyro_yaw, self.gyro_rotation)
+
+            if abs(remaining_angle) < math.radians(10):
+                twist = Twist()
+                self._cmd_vel_pub.publish(twist)
+                time.sleep(0.5)
+                break
+
+            # Rotate in place
+            rotation_direction = remaining_angle / abs(remaining_angle)
+            twist = Twist()
+            twist.linear.x = 0.0 
+            twist.angular.z = rotation_direction * math.radians(20) 
+            self._cmd_vel_pub.publish(twist)
+            time.sleep(rate)
+
+        # --- Phase 2: Move forward towards the target ---
+        moved_distance = 0.0
+        while rclpy.ok():
+            if goal_handle.is_cancel_requested:
+                self.get_logger().info("Goal canceled")
+                goal_handle.canceled()
+                return GoToPoint.Result(success=False, message="Goal canceled")
+
+            
+
+            #current_yaw = self.normalize_angle(self.gyro_rotation + offset)
+            #desired_yaw = self.normalize_angle(math.atan2(dy, dx))
+            #yaw_error = self.normalize_angle(self._angle_diff(desired_yaw, current_yaw))
+
+            feedback_msg.distance_remaining = distance - moved_distance
             goal_handle.publish_feedback(feedback_msg)
-            self.get_logger().info(
-                f"Current Yaw: {current_yaw:.2f}, Desired Yaw: {desired_yaw:.2f}, Yaw Error: {yaw_error:.2f}"
-            )
 
-            if distance < 0.1:
+            if distance - moved_distance < 0.05:
                 # Stop robot
                 twist = Twist()
                 self._cmd_vel_pub.publish(twist)
-                time.sleep(rate)  # allow time to stop
+                time.sleep(0.5)
                 break
 
-            # Proportional control
-            linear_speed = min(0.2, 0.5 * distance)
-            angular_speed = 1.0 * yaw_error  # Tune gain
-
-            # Publish Twist command
+            # Move forward, but correct heading slightly if needed
             twist = Twist()
-            twist.linear.x = linear_speed
-            twist.angular.z = angular_speed
+            twist.linear.x = 0.2
+            moved_distance += twist.linear.x * rate
+            #twist.angular.z = max(-0.3, min(0.3, 1.0 * yaw_error))  # Small correction
             self._cmd_vel_pub.publish(twist)
-
-            # e.g., send velocity commands to move toward the target while adjusting orientation
-
             time.sleep(rate)
 
-        twist = Twist()  # zero velocities
+        # Stop robot at the end
+        twist = Twist()
         self._cmd_vel_pub.publish(twist)
 
         goal_handle.succeed()

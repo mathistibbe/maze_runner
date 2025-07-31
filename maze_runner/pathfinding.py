@@ -1,10 +1,11 @@
+
 import numpy as np
 import heapq
 import matplotlib.pyplot as plt
 from matplotlib import colors
 
 
-def visualize_path(maze, path, start, goal, filename="path_visualization"):
+def visualize_path(maze, path, start, goal, filename="./src/path_visualization"):
 
     rows, cols = maze.shape
     maze = np.where(maze == -1, 0, maze)
@@ -36,7 +37,7 @@ def visualize_path(maze, path, start, goal, filename="path_visualization"):
             "gray",
         ]
     )
-    bounds = [0, 1, 2, 3, 4, 5]
+    bounds = [-0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
     norm = colors.BoundaryNorm(bounds, cmap.N)
 
     fig, ax = plt.subplots()
@@ -60,7 +61,7 @@ def visualize_path(maze, path, start, goal, filename="path_visualization"):
     plt.close()
 
 
-def a_star(maze: np.ndarray, start: tuple, goal: tuple):
+def a_star(maze: np.ndarray, start: tuple, goal: tuple, step_size=1):
     rows, cols = maze.shape
     open_set = []
     heapq.heappush(open_set, (0, start))
@@ -78,35 +79,139 @@ def a_star(maze: np.ndarray, start: tuple, goal: tuple):
             while current in came_from:
                 current = came_from[current]
                 path.append(current)
-
             return path[::-1]
 
-        step_size = 10  # Number of cells per move
-
-        for dx, dy in [
+        directions = [
             (-step_size, 0),
             (step_size, 0),
             (0, -step_size),
             (0, step_size),
-        ]:
-            neighbor = (current[0] + dx, current[1] + dy)
+        ]
 
+        # Standard moves (fixed step_size)
+        for dx, dy in directions:
+            neighbor = (current[0] + dx, current[1] + dy)
             if (
                 0 <= neighbor[0] < rows
                 and 0 <= neighbor[1] < cols
                 and maze[neighbor[0], neighbor[1]] == 0
             ):
-                # Optionally: Check all intermediate cells in the stride for safety
                 path_clear = True
-                for i in range(1, step_size):
+                for i in range(1, step_size + 1):
                     intermediate = (
-                        current[0] + dx // step_size * i,
-                        current[1] + dy // step_size * i,
+                        current[0] + (dx // step_size) * i if dx != 0 else current[0],
+                        current[1] + (dy // step_size) * i if dy != 0 else current[1],
                     )
-                    if maze[intermediate[0], intermediate[1]] != 0:
+                    if (
+                        intermediate[0] < 0 or intermediate[0] >= rows or
+                        intermediate[1] < 0 or intermediate[1] >= cols or
+                        maze[intermediate[0], intermediate[1]] != 0
+                    ):
                         path_clear = False
                         break
+                if not path_clear:
+                    continue
 
+                tentative_g = g_score[current] + 1
+                if tentative_g < g_score.get(neighbor, float("inf")):
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative_g
+                    f_score = tentative_g + heuristic(neighbor, goal)
+                    heapq.heappush(open_set, (f_score, neighbor))
+
+        # Lenient final move: allow any straight move to goal if path is clear
+        if current[0] == goal[0]:
+            step = 1 if goal[1] > current[1] else -1
+            dist = abs(goal[1] - current[1])
+            path_clear = True
+            for i in range(1, dist + 1):
+                intermediate = (current[0], current[1] + step * i)
+                if (
+                    intermediate[1] < 0 or intermediate[1] >= cols or
+                    maze[intermediate[0], intermediate[1]] != 0
+                ):
+                    path_clear = False
+                    break
+            if path_clear:
+                neighbor = goal
+                tentative_g = g_score[current] + 1
+                if tentative_g < g_score.get(neighbor, float("inf")):
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative_g
+                    f_score = tentative_g + heuristic(neighbor, goal)
+                    heapq.heappush(open_set, (f_score, neighbor))
+        elif current[1] == goal[1]:
+            step = 1 if goal[0] > current[0] else -1
+            dist = abs(goal[0] - current[0])
+            path_clear = True
+            for i in range(1, dist + 1):
+                intermediate = (current[0] + step * i, current[1])
+                if (
+                    intermediate[0] < 0 or intermediate[0] >= rows or
+                    maze[intermediate[0], intermediate[1]] != 0
+                ):
+                    path_clear = False
+                    break
+            if path_clear:
+                neighbor = goal
+                tentative_g = g_score[current] + 1
+                if tentative_g < g_score.get(neighbor, float("inf")):
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative_g
+                    f_score = tentative_g + heuristic(neighbor, goal)
+                    heapq.heappush(open_set, (f_score, neighbor))
+
+    return None
+
+def b_star(maze: np.ndarray, start: tuple, goal: tuple, step_size=1):
+    rows, cols = maze.shape
+    open_set = []
+    heapq.heappush(open_set, (0, start))
+    came_from = {}
+    g_score = {start: 0}
+
+    def heuristic(a, b):
+        return abs(a[0] - b[0]) + abs(a[1] - b[1])  # Manhattan distance
+
+    while open_set:
+        _, current = heapq.heappop(open_set)
+
+        # If goal is within step_size, add goal and return path
+        if abs(current[0] - goal[0]) + abs(current[1] - goal[1]) <= step_size:
+            path = [goal, current]
+            while current in came_from:
+                current = came_from[current]
+                path.append(current)
+            return path[::-1]
+
+        directions = [
+            (-step_size, 0),
+            (step_size, 0),
+            (0, -step_size),
+            (0, step_size),
+        ]
+
+        for dx, dy in directions:
+            neighbor = (current[0] + dx, current[1] + dy)
+            if (
+                0 <= neighbor[0] < rows
+                and 0 <= neighbor[1] < cols
+                and maze[neighbor[0], neighbor[1]] == 0
+            ):
+                # Check all intermediate cells between current and neighbor
+                path_clear = True
+                for i in range(1, step_size + 1):
+                    intermediate = (
+                        current[0] + (dx // step_size) * i if dx != 0 else current[0],
+                        current[1] + (dy // step_size) * i if dy != 0 else current[1],
+                    )
+                    if (
+                        intermediate[0] < 0 or intermediate[0] >= rows or
+                        intermediate[1] < 0 or intermediate[1] >= cols or
+                        maze[intermediate[0], intermediate[1]] != 0
+                    ):
+                        path_clear = False
+                        break
                 if not path_clear:
                     continue
 
@@ -118,6 +223,114 @@ def a_star(maze: np.ndarray, start: tuple, goal: tuple):
                     heapq.heappush(open_set, (f_score, neighbor))
 
     return None
+
+def c_star(maze: np.ndarray, start: tuple, goal: tuple):
+    rows, cols = maze.shape
+    step_size = 10
+    open_set = []
+    heapq.heappush(open_set, (0, start))
+    came_from = {}
+    g_score = {start: 0}
+
+    def heuristic(a, b):
+        return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+    while open_set:
+        _, current = heapq.heappop(open_set)
+
+        if current == goal:
+            path = [current]
+            while current in came_from:
+                current = came_from[current]
+                path.append(current)
+            return path[::-1]
+
+        # Try moving in steps of 10 cells
+        for dx, dy in [(-step_size, 0), (step_size, 0), (0, -step_size), (0, step_size)]:
+            neighbor = (current[0] + dx, current[1] + dy)
+            if 0 <= neighbor[0] < rows and 0 <= neighbor[1] < cols:
+                # Check all intermediate cells for obstacles
+                path_clear = True
+                for i in range(1, step_size + 1):
+                    intermediate = (
+                        current[0] + (dx // step_size) * i if dx != 0 else current[0],
+                        current[1] + (dy // step_size) * i if dy != 0 else current[1],
+                    )
+                    if maze[intermediate[0], intermediate[1]] != 0:
+                        path_clear = False
+                        break
+                if not path_clear:
+                    continue
+                tentative_g = g_score[current] + 1
+                if tentative_g < g_score.get(neighbor, float("inf")):
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative_g
+                    f_score = tentative_g + heuristic(neighbor, goal)
+                    heapq.heappush(open_set, (f_score, neighbor))
+
+        # Try direct move to goal if aligned and path is clear (final step)
+        if current[0] == goal[0]:
+            step = 1 if goal[1] > current[1] else -1
+            dist = abs(goal[1] - current[1])
+            path_clear = True
+            for i in range(1, dist + 1):
+                intermediate = (current[0], current[1] + step * i)
+                if maze[intermediate[0], intermediate[1]] != 0:
+                    path_clear = False
+                    break
+            if path_clear:
+                neighbor = goal
+                tentative_g = g_score[current] + 1
+                if tentative_g < g_score.get(neighbor, float("inf")):
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative_g
+                    f_score = tentative_g
+                    heapq.heappush(open_set, (f_score, neighbor))
+        elif current[1] == goal[1]:
+            step = 1 if goal[0] > current[0] else -1
+            dist = abs(goal[0] - current[0])
+            path_clear = True
+            for i in range(1, dist + 1):
+                intermediate = (current[0] + step * i, current[1])
+                if maze[intermediate[0], intermediate[1]] != 0:
+                    path_clear = False
+                    break
+            if path_clear:
+                neighbor = goal
+                tentative_g = g_score[current] + 1
+                if tentative_g < g_score.get(neighbor, float("inf")):
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative_g
+                    f_score = tentative_g
+                    heapq.heappush(open_set, (f_score, neighbor))
+
+    return None
+
+def reduce_path_to_straights(path):
+    """
+    Reduces a path of grid indices to only the points where the direction changes.
+    Keeps the start, end, and all "corners".
+    Args:
+        path (list of (x, y)): The original path as a list of grid indices.
+    Returns:
+        list of (x, y): Reduced path with only waypoints at direction changes.
+    """
+    if not path or len(path) < 2:
+        return path
+
+    reduced = [path[0]]
+    prev_dx = path[1][0] - path[0][0]
+    prev_dy = path[1][1] - path[0][1]
+
+    for i in range(2, len(path)):
+        dx = path[i][0] - path[i-1][0]
+        dy = path[i][1] - path[i-1][1]
+        if (dx, dy) != (prev_dx, prev_dy):
+            reduced.append(path[i-1])
+        prev_dx, prev_dy = dx, dy
+
+    reduced.append(path[-1])
+    return reduced
 
 
 # ---- TEST CASE ----
