@@ -32,7 +32,6 @@ class GoToPointActionServer(Node):
         )
         self.gyro_north_offset = None
         
-        self.current_heading = 0
         # Gyro rotation subscription
         self.rotation_sub = self.create_subscription(
             Float32, "rotation", self.rotation_callback, qos_profile_sensor_data
@@ -42,77 +41,6 @@ class GoToPointActionServer(Node):
         # Publisher for velocity commands
         self._cmd_vel_pub = self.create_publisher(Twist, "cmd", 10)
 
-    def goal_callback(self, goal_request):
-        """Accept or reject incoming goal request."""
-        self.get_logger().info(f"Received goal: x={goal_request.x}, y={goal_request.y}")
-        return GoalResponse.ACCEPT
-
-    def cancel_callback(self, goal_handle):
-        """Handle goal cancellation."""
-        self.get_logger().info("Received cancel request")
-        return CancelResponse.ACCEPT
-
-    def rotation_callback(self, msg):
-        """Update the current rotation from subscriber."""
-        self.gyro_rotation = msg.data
-        # Set north offset on first reading
-        if self.gyro_north_offset is None and self.gyro_rotation is not None:
-            self.gyro_north_offset = self.gyro_rotation
-            self.get_logger().info(f"Gyro north offset set: {self.gyro_north_offset:.2f}")
-
-    def heading_to_angle(self, heading):
-        """Convert cardinal heading to yaw angle in radians (relative to north)."""
-        #mapping = {
-        #    0: 0.0,
-        #    1: math.pi / 2,
-        #    2: math.pi,
-        #    3: -math.pi / 2,
-        #}
-        mapping = [0.0, -math.pi / 2, math.pi, math.pi / 2]
-        return mapping[heading]
-
-    def get_local_yaw(self):
-        """Yaw relative to north at startup."""
-        if self.gyro_rotation is None or self.gyro_north_offset is None:
-            return None
-        return self.normalize_angle(self.gyro_rotation - self.gyro_north_offset)
-
-    
-
-    def _get_yaw_from_quaternion(self, q: Quaternion):
-        x, y, z, w = q.x, q.y, q.z, q.w
-        siny_cosp = 2.0 * (w * z + x * y)
-        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-        return math.atan2(siny_cosp, cosy_cosp)
-
-    def _angle_diff(self, target, current):
-        diff = target - current
-        while diff > math.pi:
-            diff -= 2 * math.pi
-        while diff < -math.pi:
-            diff += 2 * math.pi
-        return diff
-
-    def normalize_angle(self, angle):
-        return np.arctan2(np.sin(angle),np.cos(angle))
-
-    def pos_calulation(self, target_x, target_y):
-        """Calculate the distance and angle to the target position."""
-        if self._current_pose is None:
-            return None, None
-
-        dx = target_x - self._current_pose.position.x
-        dy = target_y - self._current_pose.position.y
-        distance = math.hypot(dx, dy)
-        desired_yaw = math.atan2(dy, dx)
-        self.get_logger().info(f"dx: {dx}, dy: {dy}, distance: {distance}, desired_yaw: {desired_yaw}")
-
-        #if distance > 0.5:
-            # self.get_logger().info(f"Distance threshold not met: {distance:.2f} > 0.3")
-        #    time.sleep(0.1)  # wait for the robot to stabilize
-        #    return self.pos_calulation(target_x, target_y)
-
-        return distance, desired_yaw
     
 
     
@@ -195,6 +123,69 @@ class GoToPointActionServer(Node):
         self.get_logger().info("Goal reached successfully")
 
         return GoToPoint.Result(success=True, message="Goal reached")
+
+        
+
+    def pos_calulation(self, target_x, target_y):
+        """Calculate the distance and angle to the target position."""
+        if self._current_pose is None:
+            return None, None
+
+        dx = target_x - self._current_pose.position.x
+        dy = target_y - self._current_pose.position.y
+        distance = math.hypot(dx, dy)
+        desired_yaw = math.atan2(dy, dx)
+        self.get_logger().info(f"dx: {dx}, dy: {dy}, distance: {distance}, desired_yaw: {desired_yaw}")
+
+        #if distance > 0.5:
+            # self.get_logger().info(f"Distance threshold not met: {distance:.2f} > 0.3")
+        #    time.sleep(0.1)  # wait for the robot to stabilize
+        #    return self.pos_calulation(target_x, target_y)
+
+        return distance, desired_yaw
+
+    
+    def get_local_yaw(self):
+        """Yaw relative to north at startup."""
+        if self.gyro_rotation is None or self.gyro_north_offset is None:
+            return None
+        return self.normalize_angle(self.gyro_rotation - self.gyro_north_offset)
+
+    def _get_yaw_from_quaternion(self, q: Quaternion):
+        x, y, z, w = q.x, q.y, q.z, q.w
+        siny_cosp = 2.0 * (w * z + x * y)
+        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+        return math.atan2(siny_cosp, cosy_cosp)
+
+    def _angle_diff(self, target, current):
+        diff = target - current
+        while diff > math.pi:
+            diff -= 2 * math.pi
+        while diff < -math.pi:
+            diff += 2 * math.pi
+        return diff
+
+    def normalize_angle(self, angle):
+        return np.arctan2(np.sin(angle),np.cos(angle))
+
+    def goal_callback(self, goal_request):
+        """Accept or reject incoming goal request."""
+        self.get_logger().info(f"Received goal: x={goal_request.x}, y={goal_request.y}")
+        return GoalResponse.ACCEPT
+
+    def cancel_callback(self, goal_handle):
+        """Handle goal cancellation."""
+
+        self.get_logger().info("Received cancel request")
+        return CancelResponse.ACCEPT
+
+    def rotation_callback(self, msg):
+        """Update the current rotation from subscriber."""
+        self.gyro_rotation = msg.data
+        # Set north offset on first reading
+        if self.gyro_north_offset is None and self.gyro_rotation is not None:
+            self.gyro_north_offset = self.gyro_rotation
+            self.get_logger().info(f"Gyro north offset set: {self.gyro_north_offset:.2f}")
 
 
 def main(args=None):

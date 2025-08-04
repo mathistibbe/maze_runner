@@ -7,7 +7,7 @@ from aruco_interfaces.msg import ArucoMarkers
 from geometry_msgs.msg import Pose, Point
 from nav_msgs.msg import OccupancyGrid
 from .map_creation import create_mapping, MazeMap
-from .pathfinding import visualize_path, a_star, b_star, c_star, reduce_path_to_straights
+from .pathfinding import visualize_path, a_star, b_star, c_star, reduce_path_to_straights, path_to_directions
 import math
 import numpy as np
 from rclpy.qos import qos_profile_sensor_data
@@ -159,8 +159,10 @@ class MovementPlanner(Node):
             if path is None:
                 path = []
             reduced_path = reduce_path_to_straights(path)
+
+            directions = path_to_directions(reduced_path)
             self.get_logger().info("Computed Shortest Path")
-            self.get_logger().info(f"Path: {path}")
+            self.get_logger().info(f"Path: {directions}")
             
             visualize_path(self.maze_map.map, reduced_path, start, goal)
 
@@ -171,11 +173,9 @@ class MovementPlanner(Node):
             if not self._client.wait_for_server(timeout_sec=3.0):
                 self.get_logger().error("Action server not available.")
                 return
-
-            first_step = reduced_path[1]
             
-            self.path = reduced_path
-            self.steps = 1
+            self.path = directions
+            self.steps = 0
             self.send_goal_to_action_server()
             
             
@@ -185,12 +185,12 @@ class MovementPlanner(Node):
 
     def send_goal_to_action_server(self):
         """Sends the goal to the action server."""
-        goal_point = self.grid_coordinates_to_position(self.path[self.steps][0], self.path[self.steps][1], self.maze_map)
-        self.steps += 1
+        #goal_point = self.grid_coordinates_to_position(self.path[self.steps][0], self.path[self.steps][1], self.maze_map)
+        
         goal_msg = GoToPoint.Goal()
-        goal_msg.x = goal_point.x
-        goal_msg.y = goal_point.y
-
+        goal_msg.x = float(self.path[self.steps][0])
+        goal_msg.y = float(self.path[self.steps][1])
+        self.steps += 1
         self.get_logger().info(f"Sending goal: {goal_msg.x}, {goal_msg.y}")
         self._client.wait_for_server()
         send_goal_future = self._client.send_goal_async(

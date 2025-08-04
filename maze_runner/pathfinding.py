@@ -332,6 +332,39 @@ def reduce_path_to_straights(path):
     reduced.append(path[-1])
     return reduced
 
+def path_to_directions(reduced_path):
+    """
+    Converts a reduced path to a list of (distance, direction) tuples.
+    Directions: 0, 1, 2, 3
+    """
+    if not reduced_path or len(reduced_path) < 2:
+        return []
+
+    directions = []
+    for i in range(1, len(reduced_path)):
+        x0, y0 = reduced_path[i-1]
+        x1, y1 = reduced_path[i]
+        dx = x1 - x0
+        dy = y1 - y0
+
+        if dx > 0 and dy == 0:
+            direction = 3 # W
+            distance = dx
+        elif dx < 0 and dy == 0:
+            direction = 1 # E
+            distance = -dx
+        elif dy > 0 and dx == 0:
+            direction = 0 # N
+            distance = dy
+        elif dy < 0 and dx == 0:
+            direction = 2 # S
+            distance = -dy
+        else:
+            raise ValueError(f"Non-straight segment from {reduced_path[i-1]} to {reduced_path[i]}")
+
+        directions.append((distance, direction))
+    return directions
+
 
 # ---- TEST CASE ----
 
