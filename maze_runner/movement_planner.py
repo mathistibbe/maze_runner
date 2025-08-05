@@ -6,11 +6,12 @@ from std_msgs.msg import String, Bool, Int32
 from aruco_interfaces.msg import ArucoMarkers
 from geometry_msgs.msg import Pose, Point
 from nav_msgs.msg import OccupancyGrid
-from .map_creation import create_mapping, MazeMap
-from .pathfinding import visualize_path, a_star, b_star, c_star, reduce_path_to_straights, path_to_directions
+from .map_creation import create_mapping, MazeMap, visualize_weighted_map
+from .pathfinding import visualize_path, a_star, b_star, a_star_weighted, reduce_path_to_straights, path_to_directions, a_star_straight_line
 import math
 import numpy as np
 from rclpy.qos import qos_profile_sensor_data
+import cv2
 
 from maze_interfaces.action import GoToPoint
 from rclpy.action import ActionClient
@@ -30,6 +31,9 @@ class MovementPlanner(Node):
         self.grid_sub = self.create_subscription(
             OccupancyGrid, "/occupancy/map/grid", self.grid_cb, qos_profile_sensor_data
         )
+        self.clean_robot_pose_pub = self.create_publisher(
+            Point, "clean_robot_pose", 10
+        )
         self.path_pub = self.create_publisher(Path, "follow_path", 10)
         self.movement_pub = self.create_publisher(String, "execute_movement", 10)
         self.tile_pub = self.create_publisher(
@@ -42,15 +46,28 @@ class MovementPlanner(Node):
         self.maze_map = None
         self.robot_index = None
         self.path = None
+        self.homography_matrix = None
         self.steps = 0
         timer_period = 2  # seconds
         self.timer = self.create_timer(timer_period, self.test_grid)
 
-    def _get_yaw_from_quaternion(self, q):
-        x, y, z, w = q.x, q.y, q.z, q.w
-        siny_cosp = 2.0 * (w * z + x * y)
-        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-        return math.atan2(siny_cosp, cosy_cosp)
+
+    def get_homography_matrix(self):
+        robot_pos = np.array([
+            [0,0], # top left
+            [273,-3], # top right
+            [270, 183], # bottom right
+            [27, 186] # bottom left
+        ])
+        map_points = np.array([
+            [0, 0],  # top left
+            [self.maze_map.width, 0],  # top right
+            [self.maze_map.width, self.maze_map.height],  # bottom right
+            [0, self.maze_map.height]   # bottom left
+        ])
+        self.homography_matrix, _ = cv2.findHomography(robot_pos, map_points)
+    
+
 
     def position_to_grid_coordinates(self, position, maze_map):
         """Convert a position to grid coordinates based on the map's origin and resolution.
@@ -65,7 +82,26 @@ class MovementPlanner(Node):
         y = int(
             (abs(position.y) - maze_map.origin.position.y) / maze_map.resolution
         )
+
+        # apply homography transformation
+        if self.homography_matrix is not None:
+            point = np.array([[x], [y], [1]])
+            transformed_point = self.homography_matrix @ point
+            transformed_point /= transformed_point[2]
+            x, y = int(transformed_point[0]), int(transformed_point[1])
+
         return x, y
+
+    def apply_homography_position(self, pose):
+        """Apply homography transformation to a Point."""
+        point_array = np.array([[pose.x * 100], [pose.y * 100], [1]])
+        transformed_point = self.homography_matrix @ point_array
+        transformed_point /= transformed_point[2]
+        msg = Point()
+        msg.x = float(transformed_point[0, 0] / 100)
+        msg.y = float(transformed_point[1, 0] / 100)
+        msg.z = 0.0
+        return msg
 
     def grid_coordinates_to_position(self, x, y, maze_map):
         """ Convert grid coordinates to a position in the world frame.
@@ -102,6 +138,7 @@ class MovementPlanner(Node):
             #np.savetxt("maze.out", self.maze_map.map)
             shape = np.shape(self.maze_map.map)
             numbers = np.unique(self.maze_map.map)
+            self.get_homography_matrix()
             self.get_logger().info(
                 f"---Map created---\n- resolution: {self.maze_map.resolution}\n- height: {self.maze_map.height}\n- width: {self.maze_map.width}\n- map_shape: {shape}\n- numbers: {numbers}"
             )
@@ -112,6 +149,9 @@ class MovementPlanner(Node):
     def robot_marker_cb(self, msg):
         self.robot_pos = msg.position
         self.robot_orientation = msg.orientation
+        if self.homography_matrix is not None:
+            robot_coord = self.apply_homography_position(msg.position)
+            self.clean_robot_pose_pub.publish(robot_coord)
         #rotation = math.degrees(self._get_yaw_from_quaternion(msg.orientation))
         #self.get_logger().info(f"Rotation: {rotation}°")
 
@@ -155,16 +195,22 @@ class MovementPlanner(Node):
 
             self.get_logger().info(f"Start: {start}, Goal: {goal}")
 
-            path = b_star(maze=self.maze_map.map, start=start, goal=goal)
-            if path is None:
-                path = []
+            #path = a_star_straight_line(
+            #    self.maze_map.weighted_cost_map, start, goal
+            #)
+            
+            path = a_star_weighted(
+                self.maze_map.weighted_cost_map, start, goal
+            )
+
+            self.maze_map.visualize_cost_map(path=path)
             reduced_path = reduce_path_to_straights(path)
 
             directions = path_to_directions(reduced_path)
             self.get_logger().info("Computed Shortest Path")
             self.get_logger().info(f"Path: {directions}")
-            
-            visualize_path(self.maze_map.map, reduced_path, start, goal)
+            self.get_logger().info(f"Reduced Path: {reduced_path}")
+            # visualize_path(self.maze_map.map, reduced_path, start, goal)
 
 
             # Send goal to action server
@@ -178,7 +224,12 @@ class MovementPlanner(Node):
             self.steps = 0
             self.send_goal_to_action_server()
             
-            
+    def test_map_transformation(self):
+        if self.maze_map is not None:
+            self.timer.cancel()
+            self.get_logger().info("Testing map transformation")
+            self.maze_map.visualize_cost_map()
+
 
                 
             

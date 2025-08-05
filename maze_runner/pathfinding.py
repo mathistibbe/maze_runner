@@ -60,6 +60,132 @@ def visualize_path(maze, path, start, goal, filename="./src/path_visualization")
     print(f"Path visualization saved as '{filename}.png'")
     plt.close()
 
+def a_star_weighted(cost_map, start, goal, step=1):
+    """
+    A* search on a weighted 2D cost map.
+
+    Parameters:
+    - cost_map: 2D numpy array with float values. `np.inf` = blocked.
+    - start, goal: (y, x) tuples.
+    - step: int > 0, how many cells to move per step.
+
+    Returns:
+    - path: list of (y, x) tuples from start to goal, or None if no path found.
+    """
+    H, W = cost_map.shape
+    sy, sx = start
+    gy, gx = goal
+
+    def heuristic(a, b):
+        return np.hypot(b[0] - a[0], b[1] - a[1])
+
+    def get_neighbors(pos):
+        y, x = pos
+        offsets = [(-step, 0), (step, 0), (0, -step), (0, step),
+                   (-step, -step), (-step, step), (step, -step), (step, step)]
+        for dy, dx in offsets:
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < H and 0 <= nx < W:
+                if cost_map[ny, nx] != np.inf:
+                    yield (ny, nx)
+
+    open_set = []
+    heapq.heappush(open_set, (0 + heuristic(start, goal), 0, start))
+
+    came_from = {}
+    g_score = {start: 0}
+
+    while open_set:
+        _, current_cost, current = heapq.heappop(open_set)
+
+        if current == goal:
+            # Reconstruct path
+            path = [current]
+            while current in came_from:
+                current = came_from[current]
+                path.append(current)
+            return path[::-1]
+
+        for neighbor in get_neighbors(current):
+            tentative_g = current_cost + cost_map[neighbor]
+            if neighbor not in g_score or tentative_g < g_score[neighbor]:
+                g_score[neighbor] = tentative_g
+                f = tentative_g + heuristic(neighbor, goal)
+                heapq.heappush(open_set, (f, tentative_g, neighbor))
+                came_from[neighbor] = current
+
+    return None  # No path found
+
+def a_star_straight_line(cost_map, start, goal, step=1):
+    """
+    A* search on a weighted 2D cost map, prioritizing straight-line paths.
+
+    Parameters:
+    - cost_map: 2D numpy array with float values. `np.inf` = blocked.
+    - start, goal: (y, x) tuples.
+    - step: int > 0, how many cells to move per step.
+
+    Returns:
+    - path: list of (y, x) tuples from start to goal, or None if no path found.
+    """
+    H, W = cost_map.shape
+    sy, sx = start
+    gy, gx = goal
+
+    def heuristic(a, b):
+        return np.hypot(b[0] - a[0], b[1] - a[1])  # Euclidean distance
+
+    def get_neighbors(pos, last_direction):
+        """Return valid neighbors considering the step size and previous movement direction"""
+        y, x = pos
+        neighbors = []
+        
+        if last_direction is None:  # First move, allow all directions
+            offsets = [(-step, 0), (step, 0), (0, -step), (0, step)]
+        else:
+            # Prioritize straight-line movement (same direction as previous)
+            offsets = []
+            if last_direction in ['vertical', None]:
+                offsets.extend([(-step, 0), (step, 0)])
+            if last_direction in ['horizontal', None]:
+                offsets.extend([(0, -step), (0, step)])
+
+        for dy, dx in offsets:
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < H and 0 <= nx < W:
+                if cost_map[ny, nx] != np.inf:
+                    neighbors.append((ny, nx))
+
+        return neighbors
+
+    open_set = []
+    heapq.heappush(open_set, (0 + heuristic(start, goal), 0, start, None))
+
+    came_from = {}
+    g_score = {start: 0}
+
+    while open_set:
+        _, current_cost, current, last_direction = heapq.heappop(open_set)
+
+        if current == goal:
+            # Reconstruct path
+            path = [current]
+            while current in came_from:
+                current = came_from[current]
+                path.append(current)
+            return path[::-1]  # reverse path to start -> goal
+
+        for neighbor in get_neighbors(current, last_direction):
+            tentative_g = current_cost + cost_map[neighbor]
+            if neighbor not in g_score or tentative_g < g_score[neighbor]:
+                g_score[neighbor] = tentative_g
+                f = tentative_g + heuristic(neighbor, goal)
+                heapq.heappush(open_set, (f, tentative_g, neighbor, 
+                                         'vertical' if neighbor[0] != current[0] else 'horizontal'))
+                came_from[neighbor] = current
+
+    return None 
+
 
 def a_star(maze: np.ndarray, start: tuple, goal: tuple, step_size=1):
     rows, cols = maze.shape
@@ -163,7 +289,7 @@ def a_star(maze: np.ndarray, start: tuple, goal: tuple, step_size=1):
 
     return None
 
-def b_star(maze: np.ndarray, start: tuple, goal: tuple, step_size=1):
+def b_star(maze: np.ndarray, start: tuple, goal: tuple, step_size=4):
     rows, cols = maze.shape
     open_set = []
     heapq.heappush(open_set, (0, start))
@@ -223,95 +349,18 @@ def b_star(maze: np.ndarray, start: tuple, goal: tuple, step_size=1):
                     heapq.heappush(open_set, (f_score, neighbor))
 
     return None
-
-def c_star(maze: np.ndarray, start: tuple, goal: tuple):
-    rows, cols = maze.shape
-    step_size = 10
-    open_set = []
-    heapq.heappush(open_set, (0, start))
-    came_from = {}
-    g_score = {start: 0}
-
-    def heuristic(a, b):
-        return abs(a[0] - b[0]) + abs(a[1] - b[1])
-
-    while open_set:
-        _, current = heapq.heappop(open_set)
-
-        if current == goal:
-            path = [current]
-            while current in came_from:
-                current = came_from[current]
-                path.append(current)
-            return path[::-1]
-
-        # Try moving in steps of 10 cells
-        for dx, dy in [(-step_size, 0), (step_size, 0), (0, -step_size), (0, step_size)]:
-            neighbor = (current[0] + dx, current[1] + dy)
-            if 0 <= neighbor[0] < rows and 0 <= neighbor[1] < cols:
-                # Check all intermediate cells for obstacles
-                path_clear = True
-                for i in range(1, step_size + 1):
-                    intermediate = (
-                        current[0] + (dx // step_size) * i if dx != 0 else current[0],
-                        current[1] + (dy // step_size) * i if dy != 0 else current[1],
-                    )
-                    if maze[intermediate[0], intermediate[1]] != 0:
-                        path_clear = False
-                        break
-                if not path_clear:
-                    continue
-                tentative_g = g_score[current] + 1
-                if tentative_g < g_score.get(neighbor, float("inf")):
-                    came_from[neighbor] = current
-                    g_score[neighbor] = tentative_g
-                    f_score = tentative_g + heuristic(neighbor, goal)
-                    heapq.heappush(open_set, (f_score, neighbor))
-
-        # Try direct move to goal if aligned and path is clear (final step)
-        if current[0] == goal[0]:
-            step = 1 if goal[1] > current[1] else -1
-            dist = abs(goal[1] - current[1])
-            path_clear = True
-            for i in range(1, dist + 1):
-                intermediate = (current[0], current[1] + step * i)
-                if maze[intermediate[0], intermediate[1]] != 0:
-                    path_clear = False
-                    break
-            if path_clear:
-                neighbor = goal
-                tentative_g = g_score[current] + 1
-                if tentative_g < g_score.get(neighbor, float("inf")):
-                    came_from[neighbor] = current
-                    g_score[neighbor] = tentative_g
-                    f_score = tentative_g
-                    heapq.heappush(open_set, (f_score, neighbor))
-        elif current[1] == goal[1]:
-            step = 1 if goal[0] > current[0] else -1
-            dist = abs(goal[0] - current[0])
-            path_clear = True
-            for i in range(1, dist + 1):
-                intermediate = (current[0] + step * i, current[1])
-                if maze[intermediate[0], intermediate[1]] != 0:
-                    path_clear = False
-                    break
-            if path_clear:
-                neighbor = goal
-                tentative_g = g_score[current] + 1
-                if tentative_g < g_score.get(neighbor, float("inf")):
-                    came_from[neighbor] = current
-                    g_score[neighbor] = tentative_g
-                    f_score = tentative_g
-                    heapq.heappush(open_set, (f_score, neighbor))
-
-    return None
+    
 
 def reduce_path_to_straights(path):
     """
     Reduces a path of grid indices to only the points where the direction changes.
-    Keeps the start, end, and all "corners".
+    Handles both cardinal and diagonal straight lines.
+
+    Assumes the path is in (x, y) format (Cartesian coordinates).
+
     Args:
         path (list of (x, y)): The original path as a list of grid indices.
+
     Returns:
         list of (x, y): Reduced path with only waypoints at direction changes.
     """
@@ -319,50 +368,70 @@ def reduce_path_to_straights(path):
         return path
 
     reduced = [path[0]]
-    prev_dx = path[1][0] - path[0][0]
-    prev_dy = path[1][1] - path[0][1]
+
+    def direction(p1, p2):
+        dx = p2[0] - p1[0]
+        dy = p2[1] - p1[1]
+        return (dx, dy)
+
+    prev_dir = direction(path[0], path[1])
 
     for i in range(2, len(path)):
-        dx = path[i][0] - path[i-1][0]
-        dy = path[i][1] - path[i-1][1]
-        if (dx, dy) != (prev_dx, prev_dy):
-            reduced.append(path[i-1])
-        prev_dx, prev_dy = dx, dy
+        curr_dir = direction(path[i - 1], path[i])
+        if curr_dir != prev_dir:
+            reduced.append(path[i - 1])
+        prev_dir = curr_dir
 
     reduced.append(path[-1])
     return reduced
 
+
 def path_to_directions(reduced_path):
     """
     Converts a reduced path to a list of (distance, direction) tuples.
-    Directions: 0, 1, 2, 3
+    Supports 8 directions:
+        0: N, 1: NE, 2: E, 3: SE,
+        4: S, 5: SW, 6: W, 7: NW
+    Args:
+        reduced_path (list of (x, y)): Path reduced to straights and diagonals.
+    Returns:
+        list of (distance, direction) tuples.
     """
     if not reduced_path or len(reduced_path) < 2:
         return []
 
+    direction_map = {
+        (0, 1): 0,    # N
+        (1, 1): 1,    # NW
+        (1, 0): 2,    # W
+        (1, -1): 3,   # SW
+        (0, -1): 4,   # S
+        (-1, -1): 5,  # SE
+        (-1, 0): 6,   # E
+        (-1, 1): 7    # NE
+    }
+
     directions = []
+
     for i in range(1, len(reduced_path)):
         x0, y0 = reduced_path[i-1]
         x1, y1 = reduced_path[i]
         dx = x1 - x0
         dy = y1 - y0
 
-        if dx > 0 and dy == 0:
-            direction = 3 # W
-            distance = dx
-        elif dx < 0 and dy == 0:
-            direction = 1 # E
-            distance = -dx
-        elif dy > 0 and dx == 0:
-            direction = 0 # N
-            distance = dy
-        elif dy < 0 and dx == 0:
-            direction = 2 # S
-            distance = -dy
-        else:
-            raise ValueError(f"Non-straight segment from {reduced_path[i-1]} to {reduced_path[i]}")
+        # Normalize direction vector to unit step
+        step_dx = int(dx / max(abs(dx), abs(dy))) if dx != 0 else 0
+        step_dy = int(dy / max(abs(dx), abs(dy))) if dy != 0 else 0
+
+        direction = direction_map.get((step_dx, step_dy))
+        if direction is None:
+            raise ValueError(f"Unsupported direction from {reduced_path[i-1]} to {reduced_path[i]}")
+
+        # Distance = number of steps
+        distance = max(abs(dx), abs(dy))
 
         directions.append((distance, direction))
+
     return directions
 
 

@@ -24,6 +24,7 @@ setup(
             "tag_detector = maze_runner.tag_detector:main",
             "movement_controller = maze_runner.movement_controller:main",
             "movement_planner = maze_runner.movement_planner:main",
+            "pathfinding = maze_runner.pathfinding:main",
             "obstacle_detector = maze_runner.obstacle_detector:main",
             "gotopoint_action_server = maze_runner.gotopoint_action_server:main",
         ],

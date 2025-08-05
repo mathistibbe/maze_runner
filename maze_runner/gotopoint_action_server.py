@@ -5,7 +5,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from maze_interfaces.action import GoToPoint  # replace with your actual import
-from geometry_msgs.msg import Pose  # or Odometry depending on your robot
+from geometry_msgs.msg import Pose, Point  # or Odometry depending on your robot
 from rclpy.qos import QoSProfile
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Float32
@@ -31,6 +31,23 @@ class GoToPointActionServer(Node):
             cancel_callback=self.cancel_callback,
         )
         self.gyro_north_offset = None
+        self.robot_pos = None
+
+        self.robot_pose_sub = self.create_subscription(
+            Pose,
+            "robot_pose",  # replace with your actual topic name
+            self.robot_pose_callback,
+            QoSProfile(depth=10)
+        )
+        #self.clean_robot_pose_sub = self.create_subscription(
+        #    Point,
+        #    "clean_robot_pose",  # replace with your actual topic name
+        #    self.robot_pose_callback,
+        #    QoSProfile(depth=10)
+        #)
+    
+
+
         
         self.current_heading = 0
         # Gyro rotation subscription
@@ -60,17 +77,27 @@ class GoToPointActionServer(Node):
             self.gyro_north_offset = self.gyro_rotation
             self.get_logger().info(f"Gyro north offset set: {self.gyro_north_offset:.2f}")
 
+    def robot_pose_callback(self, msg):
+        """Update the current robot pose from subscriber."""
+        self.robot_pos = (msg.position.x, msg.position.y)
+
     def heading_to_angle(self, heading):
         """Convert cardinal heading to yaw angle in radians (relative to north)."""
-        #mapping = {
-        #    0: 0.0,
-        #    1: math.pi / 2,
-        #    2: math.pi,
-        #    3: -math.pi / 2,
-        #}
-        mapping = [0.0, -math.pi / 2, math.pi, math.pi / 2]
+        mapping = {
+            0: 0.0, # North
+            1: math.pi / 4, # North-East
+            2: math.pi/2, # East
+            3: 3 * math.pi / 4, # South-East
+            4: math.pi, # South
+            5: -3 * math.pi / 4, # South-West
+            6: -math.pi / 2, # West
+            7: -math.pi / 4 # North-West
+        }
+        #mapping = [0.0, -math.pi / 2, math.pi, math.pi / 2]
         return mapping[heading]
 
+    
+    
     def get_local_yaw(self):
         """Yaw relative to north at startup."""
         if self.gyro_rotation is None or self.gyro_north_offset is None:
@@ -115,10 +142,6 @@ class GoToPointActionServer(Node):
         return distance, desired_yaw
     
 
-    
-    
-
-
     def execute_callback(self, goal_handle):
         """Main loop that drives robot to target with separate rotation and translation phases."""
         
@@ -162,30 +185,62 @@ class GoToPointActionServer(Node):
                 break
 
             # Rotate in place
-            rotation_direction = remaining_angle / abs(remaining_angle)
+            # rotation_direction = remaining_angle / abs(remaining_angle)
             twist = Twist()
             twist.linear.x = 0.0 
-            twist.angular.z = 0.2 if remaining_angle > 0 else -0.2 
+            twist.angular.z = - 0.5 if remaining_angle > 0 else 0.5 
             self._cmd_vel_pub.publish(twist)
             time.sleep(rate)
 
         # --- Phase 2: Move forward towards the target ---
-        moved_distance = 0.0
-        total_distance = distance * 10/100
-        while rclpy.ok() and moved_distance < total_distance:
+        
+        while self.robot_pos is None:
+            self.get_logger().warn("Waiting for initial robot position...")
+            time.sleep(0.1)
+
+        start_x, start_y = self.robot_pos
+        target_distance = distance * 10 /100 # cm
+        last_distance = 9999
+        while rclpy.ok():
+
             if goal_handle.is_cancel_requested:
                 self.get_logger().info("Goal canceled")
                 goal_handle.canceled()
                 return GoToPoint.Result(success=False, message="Goal canceled")
 
+            if self.robot_pos is None:
+                self.get_logger().warn("Waiting for robot position...")
+                time.sleep(0.1)
+                continue
+            
+            current_x, current_y = self.robot_pos
+            dx = current_x - start_x
+            dy = current_y - start_y
+            moved_distance = math.hypot(dx, dy)
+           
+
+            
+            if moved_distance >= target_distance:
+                break moved
+
+                
+            
+
+            if moved_distance > last_distance + 0.02:
+                self.get_logger().warn(
+                f"Moving away: moved {moved_distance:.2f}m, last {last_distance:.2f}m"
+         )
+        break
+            
+            
+            last_distance = moved_distance
+
 
             twist = Twist()
-            twist.linear.x = 0.2
-            moved_distance += 0.2 * rate
+            twist.linear.x = 0.4
             self._cmd_vel_pub.publish(twist)
+            self.get_logger().info(f"Moved: {moved_distance:.2f}m, Target: {target_distance:.2f}m")
             time.sleep(rate)
-            if total_distance - moved_distance < 0.02:
-                break
 
         # Stop robot at the end
         twist = Twist()

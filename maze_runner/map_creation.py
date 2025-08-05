@@ -2,6 +2,8 @@ import numpy as np
 import math
 from geometry_msgs.msg import Pose, Point
 from nav_msgs.msg import OccupancyGrid, MapMetaData
+from scipy.ndimage import distance_transform_edt
+import matplotlib.pyplot as plt
 
 
 class MazeMap:
@@ -18,6 +20,7 @@ class MazeMap:
         self.map[self.map < 0] = 1
         self.map = self.apply_custom_convolution(self.map)
         self.downscale_map(factor = 10)
+        self.weighted_cost_map = compute_weighted_cost_map(self.map, alpha=0.5)
         # np.savetxt("maze.out",self.map)
 
     def apply_custom_convolution(self, arr):
@@ -74,6 +77,9 @@ class MazeMap:
         self.resolution *= factor
         self.map = downscaled
 
+    def visualize_cost_map(self, path=None):
+        visualize_weighted_map(cost_map=self.weighted_cost_map, original_maze=self.map, path=path)
+
 def create_mapping(robot_point, goal_point, obstacle_points):
     """Creates a map representing a 5,05m x 5,05m plane as an np.array. Blocking obstacles are represented by a 0
     Args:
@@ -97,3 +103,59 @@ def create_mapping(robot_point, goal_point, obstacle_points):
     goal_idx = (int(goal_point.x / 0.05) + offset, int(goal_point.y / 0.05) + offset)
 
     return robot_idx, goal_idx, array_map
+
+def compute_weighted_cost_map(maze: np.ndarray, alpha: float = 1.0) -> np.ndarray:
+    """
+    Compute a cost map for A* that favors being far from walls.
+
+    Parameters:
+    - maze: 2D numpy array, where 0 = free, 1 = wall.
+    - alpha: float, how strongly to bias toward open space (higher = more centered paths).
+
+    Returns:
+    - cost_map: 2D numpy array of same shape as maze, with higher cost near walls.
+    """
+    # Step 1: Invert maze so walls = 0, free = 1
+    free_space = (maze == 0).astype(np.uint8)
+    
+    # Step 2: Compute distance to the nearest wall
+    distance_from_wall = distance_transform_edt(free_space)
+
+    # Step 3: Normalize distance map
+    max_dist = np.max(distance_from_wall)
+    if max_dist > 0:
+        normalized = distance_from_wall / max_dist
+    else:
+        normalized = distance_from_wall
+
+    # Step 4: Invert and weight (walls = high cost, centers = low cost)
+    # You can use (1 - normalized) to turn "distance from wall" into "penalty"
+    cost_map = 1.0 + alpha * (1.0 - normalized)  # Add 1 so cost is never 0
+
+    # Optional: Set walls to inf cost
+    cost_map[maze == 1] = np.inf
+
+    return cost_map
+
+import matplotlib.pyplot as plt
+
+def visualize_weighted_map(cost_map, original_maze=None, path=None, filename='./src/weighted_cost_map.png'):
+    plt.figure(figsize=(8, 8))
+    plt.imshow(cost_map, cmap='viridis', origin='lower')
+    plt.colorbar(label='Cost')
+
+    if original_maze is not None:
+        wall_y, wall_x = np.where(original_maze == 1)
+        plt.scatter(wall_x, wall_y, color='red', s=1, label='Walls')
+
+    if path is not None:
+        path = np.array(path)
+        plt.plot(path[:, 1], path[:, 0], color='white', linewidth=2, label='Path')
+
+    plt.legend()
+    plt.title("Weighted Cost Map Visualization")
+    plt.xlabel("X (columns)")
+    plt.ylabel("Y (rows)")
+    plt.tight_layout()
+    plt.savefig(filename, dpi=300)
+    plt.close()
