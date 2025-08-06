@@ -12,6 +12,7 @@ from std_msgs.msg import Float32
 from geometry_msgs.msg import Quaternion
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import qos_profile_sensor_data
+from .map_creation import RESOLUTION_FACTOR
 import numpy as np
 
 import time
@@ -32,6 +33,8 @@ class GoToPointActionServer(Node):
         )
         self.gyro_north_offset = None
         self.robot_pos = None
+
+        self._accept_cancel = True  # Flag to control cancel acceptance
 
         self.robot_pose_sub = self.create_subscription(
             Pose,
@@ -66,8 +69,14 @@ class GoToPointActionServer(Node):
 
     def cancel_callback(self, goal_handle):
         """Handle goal cancellation."""
-        self.get_logger().info("Received cancel request")
-        return CancelResponse.ACCEPT
+        if self._accept_cancel:
+            self.get_logger().info("Cancel request accepted")
+            return CancelResponse.ACCEPT
+        else:
+            self.get_logger().info("Cancel request rejected")
+            # Optionally, you can log or handle the rejection case
+            return CancelResponse.REJECT
+    
 
     def rotation_callback(self, msg):
         """Update the current rotation from subscriber."""
@@ -161,50 +170,52 @@ class GoToPointActionServer(Node):
        
 
         feedback_msg = GoToPoint.Feedback()
-        rate = 0.05
+        rate = 0.05  # 50 Hz
 
         target_yaw = self.heading_to_angle(heading)
 
             
 
         # --- Phase 1: Rotate to face the target ---
+        self._accept_cancel = False  # Disable cancel during rotation phase
         while rclpy.ok():
-            if goal_handle.is_cancel_requested:
-                self.get_logger().info("Goal canceled")
-                goal_handle.canceled()
-                return GoToPoint.Result(success=False, message="Goal canceled")
-
-
             current_yaw = self.get_local_yaw()
             remaining_angle = self._angle_diff(target_yaw, current_yaw)
             
             if abs(remaining_angle) < math.radians(2):
                 twist = Twist()
                 self._cmd_vel_pub.publish(twist)
-                time.sleep(0.2)
+                time.sleep(0.1)
                 break
 
             # Rotate in place
             # rotation_direction = remaining_angle / abs(remaining_angle)
             twist = Twist()
             twist.linear.x = 0.0 
-            twist.angular.z = - 0.5 if remaining_angle > 0 else 0.5 
+            twist.angular.z = - 0.5 if remaining_angle > 0 else 0.5
             self._cmd_vel_pub.publish(twist)
             time.sleep(rate)
 
         # --- Phase 2: Move forward towards the target ---
-        
+        moved_distance_estimate = 0.0
+        self._accept_cancel = True  # Re-enable cancel after rotation
         while self.robot_pos is None:
             self.get_logger().warn("Waiting for initial robot position...")
             time.sleep(0.1)
 
         start_x, start_y = self.robot_pos
-        target_distance = distance * 10 /100 # cm
-        last_distance = 9999
+        target_distance = distance * RESOLUTION_FACTOR / 100 # cm
         while rclpy.ok():
 
             if goal_handle.is_cancel_requested:
-                self.get_logger().info("Goal canceled")
+                self.get_logger().info("Goal canceled in movement phase")
+                self._cmd_vel_pub.publish(Twist())  # Stop robot
+                reverse_twist = Twist()
+                time.sleep(0.1)  # Allow time for stop command to take effect
+                reverse_twist.linear.x = -0.2  # Reverse speed
+                self._cmd_vel_pub.publish(reverse_twist)
+                time.sleep(0.5)
+                self._cmd_vel_pub.publish(Twist())  # Stop robot
                 goal_handle.canceled()
                 return GoToPoint.Result(success=False, message="Goal canceled")
 
@@ -216,30 +227,24 @@ class GoToPointActionServer(Node):
             current_x, current_y = self.robot_pos
             dx = current_x - start_x
             dy = current_y - start_y
-            moved_distance = math.hypot(dx, dy)
+            
+            moved_distance_pos = math.hypot(dx, dy)
            
 
             
-            if moved_distance >= target_distance:
-                break moved
-
-                
+            if moved_distance_pos >= target_distance:
+                break
+            elif moved_distance_estimate > 3* moved_distance_pos:
+                # Robot tracking is off use estimated distance
+                if moved_distance_estimate > target_distance:
+                    self.get_logger().info("Estimated distance exceeded target, stopping.")
+                    break
             
-
-            if moved_distance > last_distance + 0.02:
-                self.get_logger().warn(
-                f"Moving away: moved {moved_distance:.2f}m, last {last_distance:.2f}m"
-         )
-        break
-            
-            
-            last_distance = moved_distance
-
-
+            moved_distance_estimate += 0.3 * rate  # Assuming 0.4 m/s speed and 0.05s rate
             twist = Twist()
-            twist.linear.x = 0.4
+            twist.linear.x = 0.3  # Forward speed
             self._cmd_vel_pub.publish(twist)
-            self.get_logger().info(f"Moved: {moved_distance:.2f}m, Target: {target_distance:.2f}m")
+            self.get_logger().info(f"Postion change: {moved_distance_pos:.2f}m, Estimated distance: {moved_distance_estimate}m, Target: {target_distance:.2f}m")
             time.sleep(rate)
 
         # Stop robot at the end

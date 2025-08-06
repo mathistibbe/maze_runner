@@ -7,7 +7,7 @@ from aruco_interfaces.msg import ArucoMarkers
 from geometry_msgs.msg import Pose, Point
 from nav_msgs.msg import OccupancyGrid
 from .map_creation import create_mapping, MazeMap, visualize_weighted_map
-from .pathfinding import visualize_path, a_star, b_star, a_star_weighted, reduce_path_to_straights, path_to_directions, a_star_straight_line
+from .pathfinding import visualize_path, a_star_weighted_v2 ,a_star_weighted, reduce_path_to_straights, path_to_directions, a_star_straight_line
 import math
 import numpy as np
 from rclpy.qos import qos_profile_sensor_data
@@ -21,33 +21,30 @@ class MovementPlanner(Node):
     def __init__(self):
         super().__init__("movement_planner")
         self.goal_sub = self.create_subscription(Pose, "goal_pose", self.goal_cb, 10)
+
         self.robot_marker_sub = self.create_subscription(
             Pose, "robot_pose", self.robot_marker_cb, 10
         )
+
         self._client = ActionClient(self, GoToPoint, "go_to_point")
-        self.obstacle_marker_sub = self.create_subscription(
-            ArucoMarkers, "obstacles", self.obstacle_marker_cb, 10
-        )
+        
         self.grid_sub = self.create_subscription(
             OccupancyGrid, "/occupancy/map/grid", self.grid_cb, qos_profile_sensor_data
         )
-        self.clean_robot_pose_pub = self.create_publisher(
-            Point, "clean_robot_pose", 10
-        )
-        self.path_pub = self.create_publisher(Path, "follow_path", 10)
-        self.movement_pub = self.create_publisher(String, "execute_movement", 10)
+
+        self.color_sub = self.create_subscription(String, "color", self.color_cb, 10)
+
         self.tile_pub = self.create_publisher(
             Int32, "movement_tiles", 10
-        )  ##publisher for tiles
+        )
+    
         self.goal_pos = None
         self.robot_pos = None
-        self.robot_orientation = None
-        self.obstacle_positions = []
         self.maze_map = None
-        self.robot_index = None
         self.path = None
         self.homography_matrix = None
         self.steps = 0
+        self._current_goal_handle = None
         timer_period = 2  # seconds
         self.timer = self.create_timer(timer_period, self.test_grid)
 
@@ -143,24 +140,36 @@ class MovementPlanner(Node):
                 f"---Map created---\n- resolution: {self.maze_map.resolution}\n- height: {self.maze_map.height}\n- width: {self.maze_map.width}\n- map_shape: {shape}\n- numbers: {numbers}"
             )
 
+    def color_cb(self, msg):
+        """Callback for the color topic."""
+        if msg.data == "red":
+            self.get_logger().info("Red color detected")
+            if self._current_goal_handle is not None:
+                future = self._current_goal_handle.cancel_goal_async()
+                future.add_done_callback(self.cancel_goal_callback)
+                self.get_logger().info("Sending cancel request to action server")
+            
+
     def goal_cb(self, msg):
         self.goal_pos = msg.position
 
     def robot_marker_cb(self, msg):
         self.robot_pos = msg.position
-        self.robot_orientation = msg.orientation
-        if self.homography_matrix is not None:
-            robot_coord = self.apply_homography_position(msg.position)
-            self.clean_robot_pose_pub.publish(robot_coord)
-        #rotation = math.degrees(self._get_yaw_from_quaternion(msg.orientation))
-        #self.get_logger().info(f"Rotation: {rotation}°")
+        
 
-    def obstacle_marker_cb(self, msg):
-        self.obstacle_positions = [marker.pose.position for marker in msg.markers]
 
     def feedback_callback(self, feedback_msg):
         distance = feedback_msg.feedback.distance_remaining
         #self.get_logger().info(f"Distance remaining: {distance:.2f}")
+
+    def cancel_goal_callback(self, future):
+        """Callback for goal cancellation."""
+        if len(future.result().goals_canceling) > 0:
+            self._current_goal_handle = None
+            self.get_logger().info("Goal successfully cancelled")
+            self.escape_maze()
+        else:
+            self.get_logger().error("Failed to cancel the goal")
 
     def goal_response_callback(self, future):
         goal_handle = future.result()
@@ -169,6 +178,7 @@ class MovementPlanner(Node):
             return
 
         self.get_logger().info("Goal accepted")
+        self._current_goal_handle = goal_handle
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self.get_result_callback)
 
@@ -177,52 +187,40 @@ class MovementPlanner(Node):
         self.get_logger().info(
             f"Result: success={result.success}, message={result.message}"
         )
+        self._current_goal_handle = None
         if result.success:
             if self.steps >= len(self.path):
                 self.get_logger().info("Reached the goal successfully!")
             else:
                 self.send_goal_to_action_server()
 
+    def escape_maze(self):
+        start = self.position_to_grid_coordinates(self.robot_pos, self.maze_map)
+        goal = self.position_to_grid_coordinates(self.goal_pos, self.maze_map)
+        self.get_logger().info(f"Start: {start}, Goal: {goal}")
+        path = a_star_weighted_v2(self.maze_map.weighted_cost_map, start, goal, step = 1)
+        self.maze_map.visualize_cost_map(path=path)
+        if path is None:
+            self.get_logger().error("No path found to the goal.")
+            return
+        self.get_logger().info(f"Path: {path}")
+        reduced_path = reduce_path_to_straights(path)
+        self.get_logger().info(f"Reduced Path: {reduced_path}")
+        directions = path_to_directions(reduced_path)
+        
+        
+        self.path = directions
+        self.steps = 0
+        if not self._client.wait_for_server(timeout_sec=3.0):
+                self.get_logger().error("Action server not available.")
+                return
+        self.send_goal_to_action_server()
+
     def test_grid(self):
         """Tests the visualization of Maze Maps that are created from occupancy grids."""
         if self.maze_map is not None and self.robot_pos is not None and self.goal_pos is not None:
             self.timer.cancel()
-            start = self.position_to_grid_coordinates(self.robot_pos, self.maze_map)
-            goal = self.position_to_grid_coordinates(self.goal_pos, self.maze_map)
-
-            #start = (30,60)
-            #goal = (230, 200)
-
-            self.get_logger().info(f"Start: {start}, Goal: {goal}")
-
-            #path = a_star_straight_line(
-            #    self.maze_map.weighted_cost_map, start, goal
-            #)
-            
-            path = a_star_weighted(
-                self.maze_map.weighted_cost_map, start, goal
-            )
-
-            self.maze_map.visualize_cost_map(path=path)
-            reduced_path = reduce_path_to_straights(path)
-
-            directions = path_to_directions(reduced_path)
-            self.get_logger().info("Computed Shortest Path")
-            self.get_logger().info(f"Path: {directions}")
-            self.get_logger().info(f"Reduced Path: {reduced_path}")
-            # visualize_path(self.maze_map.map, reduced_path, start, goal)
-
-
-            # Send goal to action server
-
-
-            if not self._client.wait_for_server(timeout_sec=3.0):
-                self.get_logger().error("Action server not available.")
-                return
-            
-            self.path = directions
-            self.steps = 0
-            self.send_goal_to_action_server()
+            self.escape_maze()
             
     def test_map_transformation(self):
         if self.maze_map is not None:

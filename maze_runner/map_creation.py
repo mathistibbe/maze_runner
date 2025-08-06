@@ -6,6 +6,8 @@ from scipy.ndimage import distance_transform_edt
 import matplotlib.pyplot as plt
 
 
+RESOLUTION_FACTOR = 5
+
 class MazeMap:
 
     def __init__(self, occupancy_grid: OccupancyGrid):
@@ -19,8 +21,9 @@ class MazeMap:
         self.map[self.map > 0] = 0
         self.map[self.map < 0] = 1
         self.map = self.apply_custom_convolution(self.map)
-        self.downscale_map(factor = 10)
-        self.weighted_cost_map = compute_weighted_cost_map(self.map, alpha=0.5)
+        self.downscale_map(factor = RESOLUTION_FACTOR)
+        self.weighted_cost_map = compute_weighted_cost_map(self.map, alpha=0.4)
+        self.inflate_cost_map_to_walls(threshold=1.24, wall_value=np.inf)
         # np.savetxt("maze.out",self.map)
 
     def apply_custom_convolution(self, arr):
@@ -79,6 +82,18 @@ class MazeMap:
 
     def visualize_cost_map(self, path=None):
         visualize_weighted_map(cost_map=self.weighted_cost_map, original_maze=self.map, path=path)
+    
+    def inflate_cost_map_to_walls(self, threshold=1, wall_value=np.inf):
+        """
+        Converts high-cost areas in a cost map to wall values, simulating padding around obstacles.
+
+        Args:
+            threshold (float): Threshold above which cells are considered walls.
+            wall_value (int): The value to assign to inflated wall cells.
+        """
+        
+
+        self.weighted_cost_map[self.weighted_cost_map >= threshold] = wall_value
 
 def create_mapping(robot_point, goal_point, obstacle_points):
     """Creates a map representing a 5,05m x 5,05m plane as an np.array. Blocking obstacles are represented by a 0
@@ -103,6 +118,7 @@ def create_mapping(robot_point, goal_point, obstacle_points):
     goal_idx = (int(goal_point.x / 0.05) + offset, int(goal_point.y / 0.05) + offset)
 
     return robot_idx, goal_idx, array_map
+
 
 def compute_weighted_cost_map(maze: np.ndarray, alpha: float = 1.0) -> np.ndarray:
     """

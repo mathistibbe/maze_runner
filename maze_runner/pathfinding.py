@@ -1,6 +1,7 @@
 
 import numpy as np
 import heapq
+from collections import deque
 import matplotlib.pyplot as plt
 from matplotlib import colors
 
@@ -59,6 +60,90 @@ def visualize_path(maze, path, start, goal, filename="./src/path_visualization")
     plt.savefig(f"{filename}.png", dpi=500)
     print(f"Path visualization saved as '{filename}.png'")
     plt.close()
+
+def a_star_weighted_v2(cost_map, start, goal, step=1):
+    """
+    A* search on a weighted 2D cost map. If the start is inside an obstacle, 
+    finds the closest free cell and starts from there.
+
+    Parameters:
+    - cost_map: 2D numpy array with float values. `np.inf` = blocked.
+    - start, goal: (y, x) tuples.
+    - step: int > 0, how many cells to move per step.
+
+    Returns:
+    - path: list of (y, x) tuples from start to goal, or None if no path found.
+    """
+    H, W = cost_map.shape
+    sy, sx = start
+    gy, gx = goal
+
+    def heuristic(a, b):
+        return np.hypot(b[0] - a[0], b[1] - a[1])
+
+    def get_neighbors(pos):
+        y, x = pos
+        offsets = [(-step, 0), (step, 0), (0, -step), (0, step),
+                   (-step, -step), (-step, step), (step, -step), (step, step)]
+        for dy, dx in offsets:
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < H and 0 <= nx < W:
+                if cost_map[ny, nx] != np.inf:
+                    yield (ny, nx)
+
+    def find_closest_free_cell(start):
+        """Breadth-first search to find the nearest non-obstacle cell."""
+        visited = set()
+        queue = deque([start])
+        while queue:
+            cy, cx = queue.popleft()
+            if (cy, cx) in visited:
+                continue
+            visited.add((cy, cx))
+            if 0 <= cy < H and 0 <= cx < W and cost_map[cy, cx] != np.inf:
+                return (cy, cx)
+            # Check 4-connected neighbors (more robust against narrow passages)
+            for dy, dx in [(-1,0), (1,0), (0,-1), (0,1)]:
+                ny, nx = cy + dy, cx + dx
+                if 0 <= ny < H and 0 <= nx < W and (ny, nx) not in visited:
+                    queue.append((ny, nx))
+        return None
+
+    # --- Adjust start if it's in a wall ---
+    if cost_map[sy, sx] == np.inf:
+        new_start = find_closest_free_cell(start)
+        if new_start is None:
+            return None  # No free cell found
+        sy, sx = new_start
+        start = (sy, sx)
+
+    # --- A* Search ---
+    open_set = []
+    heapq.heappush(open_set, (heuristic(start, goal), 0, start))
+
+    came_from = {}
+    g_score = {start: 0}
+
+    while open_set:
+        _, current_cost, current = heapq.heappop(open_set)
+
+        if current == goal:
+            # Reconstruct path
+            path = [current]
+            while current in came_from:
+                current = came_from[current]
+                path.append(current)
+            return path[::-1]
+
+        for neighbor in get_neighbors(current):
+            tentative_g = current_cost + cost_map[neighbor]
+            if neighbor not in g_score or tentative_g < g_score[neighbor]:
+                g_score[neighbor] = tentative_g
+                f = tentative_g + heuristic(neighbor, goal)
+                heapq.heappush(open_set, (f, tentative_g, neighbor))
+                came_from[neighbor] = current
+
+    return None  # No path found
 
 def a_star_weighted(cost_map, start, goal, step=1):
     """
