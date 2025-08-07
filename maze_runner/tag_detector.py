@@ -36,11 +36,11 @@ class TagDetector(Node):
 
         # Subscriber for the aruco marker detections
         self.subscription = self.create_subscription(
-            ArucoMarkers, "/aruco/markers/transformed", self.aruco_callback, qos_profile_sensor_data
+            ArucoMarkers, "/aruco/markers/uncertain", self.aruco_callback, qos_profile_sensor_data
         )
 
         self.get_logger().info(
-            "Tag detector node started. Listening to /aruco/markers/transformed"
+            "Tag detector node started. Listening to /aruco/markers/uncertain"
         )
 
     def aruco_callback(self, msg: ArucoMarkers):

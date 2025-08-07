@@ -50,11 +50,17 @@ class MovementPlanner(Node):
 
 
     def get_homography_matrix(self):
-        robot_pos = np.array([
+        transformed_robot_pos = np.array([
             [0,0], # top left
             [273,-3], # top right
             [270, 183], # bottom right
             [27, 186] # bottom left
+        ])
+        uncertain_robot_pos = np.array([
+            [0,0],
+            [264, 41],
+            [231, 225],
+            [-12, 188]
         ])
         map_points = np.array([
             [0, 0],  # top left
@@ -62,7 +68,7 @@ class MovementPlanner(Node):
             [self.maze_map.width, self.maze_map.height],  # bottom right
             [0, self.maze_map.height]   # bottom left
         ])
-        self.homography_matrix, _ = cv2.findHomography(robot_pos, map_points)
+        self.homography_matrix, _ = cv2.findHomography(uncertain_robot_pos, map_points)
     
 
 

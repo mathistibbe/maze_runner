@@ -10,9 +10,13 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 def generate_launch_description():
 
     robot_ns = LaunchConfiguration("robot_ns")
-
+    initial_heading = LaunchConfiguration("initial_heading")
 
     robot_ns_launch_arg = DeclareLaunchArgument("robot_ns", default_value="rp8")
+
+    initial_heading_launch_arg = DeclareLaunchArgument(
+        "initial_heading", default_value="0"
+    )
 
     # movementcontroller = Node(
     #    package="maze_runner",
@@ -27,6 +31,7 @@ def generate_launch_description():
         executable="gotopoint_action_server",
         name="gotopoint_action_server",
         output="screen",
+        parameters=[{"initial_heading": LaunchConfiguration("initial_heading")}],
     )
     movementplanner = Node(
         package="maze_runner",
@@ -45,6 +50,7 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
+            initial_heading_launch_arg,
             robot_ns_launch_arg,
             go_to_point_action_server,
             # movementcontroller,

@@ -34,6 +34,9 @@ class GoToPointActionServer(Node):
         self.gyro_north_offset = None
         self.robot_pos = None
 
+        self.declare_parameter("initial_heading", 0)
+        self.current_heading = self.get_parameter("initial_heading").value
+
         self._accept_cancel = True  # Flag to control cancel acceptance
 
         self.robot_pose_sub = self.create_subscription(
@@ -51,8 +54,6 @@ class GoToPointActionServer(Node):
     
 
 
-        
-        self.current_heading = 0
         # Gyro rotation subscription
         self.rotation_sub = self.create_subscription(
             Float32, "rotation", self.rotation_callback, qos_profile_sensor_data
@@ -81,10 +82,11 @@ class GoToPointActionServer(Node):
     def rotation_callback(self, msg):
         """Update the current rotation from subscriber."""
         self.gyro_rotation = msg.data
-        # Set north offset on first reading
         if self.gyro_north_offset is None and self.gyro_rotation is not None:
+            self.get_logger().info(f"Current heading: {self.current_heading}")
             self.gyro_north_offset = self.gyro_rotation
-            self.get_logger().info(f"Gyro north offset set: {self.gyro_north_offset:.2f}")
+            self.gyro_north_offset += self.heading_to_angle(self.current_heading)
+            self.get_logger().info(f"Gyro north offset set (adjusted): {self.gyro_north_offset:.2f}")
 
     def robot_pose_callback(self, msg):
         """Update the current robot pose from subscriber."""
@@ -182,7 +184,7 @@ class GoToPointActionServer(Node):
             current_yaw = self.get_local_yaw()
             remaining_angle = self._angle_diff(target_yaw, current_yaw)
             
-            if abs(remaining_angle) < math.radians(2):
+            if abs(remaining_angle) < math.radians(1):
                 twist = Twist()
                 self._cmd_vel_pub.publish(twist)
                 time.sleep(0.1)
@@ -192,7 +194,7 @@ class GoToPointActionServer(Node):
             # rotation_direction = remaining_angle / abs(remaining_angle)
             twist = Twist()
             twist.linear.x = 0.0 
-            twist.angular.z = - 0.5 if remaining_angle > 0 else 0.5
+            twist.angular.z = - 0.7 if remaining_angle > 0 else 0.7
             self._cmd_vel_pub.publish(twist)
             time.sleep(rate)
 
@@ -240,9 +242,10 @@ class GoToPointActionServer(Node):
                     self.get_logger().info("Estimated distance exceeded target, stopping.")
                     break
             
-            moved_distance_estimate += 0.3 * rate  # Assuming 0.4 m/s speed and 0.05s rate
+              # Assuming 0.4 m/s speed and 0.05s rate
             twist = Twist()
-            twist.linear.x = 0.3  # Forward speed
+            twist.linear.x = max(0.3, min(1.0, target_distance - moved_distance_estimate * 0.8) )# Forward speed
+            moved_distance_estimate += twist.linear.x * rate
             self._cmd_vel_pub.publish(twist)
             self.get_logger().info(f"Postion change: {moved_distance_pos:.2f}m, Estimated distance: {moved_distance_estimate}m, Target: {target_distance:.2f}m")
             time.sleep(rate)

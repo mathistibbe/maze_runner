@@ -23,7 +23,7 @@ class MazeMap:
         self.map = self.apply_custom_convolution(self.map)
         self.downscale_map(factor = RESOLUTION_FACTOR)
         self.weighted_cost_map = compute_weighted_cost_map(self.map, alpha=0.4)
-        self.inflate_cost_map_to_walls(threshold=1.24, wall_value=np.inf)
+        self.inflate_cost_map_to_walls(threshold=1.29, wall_value=np.inf)
         # np.savetxt("maze.out",self.map)
 
     def apply_custom_convolution(self, arr):
