@@ -31,8 +31,8 @@ class TagDetector(Node):
         self.robot_pub = self.create_publisher(Pose, "robot_pose", 10)
         self.goal_pub = self.create_publisher(Pose, "goal_pose", 10)
         self.obstacle_pub = self.create_publisher(ArucoMarkers, "obstacles", 10)
-        self.rviz_robot_pub = self.create_publisher(PoseStamped, "rviz_robot_pose", 10)
-        self.rviz_goal_pub = self.create_publisher(PoseStamped, "rviz_goal_pose", 10)
+        #self.rviz_robot_pub = self.create_publisher(PoseStamped, "rviz_robot_pose", 10)
+        #self.rviz_goal_pub = self.create_publisher(PoseStamped, "rviz_goal_pose", 10)
 
         # Subscriber for the aruco marker detections
         self.subscription = self.create_subscription(
@@ -70,7 +70,7 @@ class TagDetector(Node):
             robot_marker.pose.position.z = 0.0
             robot_marker.pose.orientation.x = 0.0
             robot_marker.pose.orientation.y = 0.0
-            self.rviz_robot_pub.publish(robotrvpose)
+            #self.rviz_robot_pub.publish(robotrvpose)
             self.robot_pub.publish(robot_marker.pose)
             
             
@@ -88,7 +88,7 @@ class TagDetector(Node):
             goal_marker.pose.position.z = 0.0
             goal_marker.pose.orientation.x = 0.0
             goal_marker.pose.orientation.y = 0.0
-            self.rviz_goal_pub.publish(goalrvpose)
+            #self.rviz_goal_pub.publish(goalrvpose)
             self.goal_pub.publish(goal_marker.pose)
 
         # Publish obstacles if any

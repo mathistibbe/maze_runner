@@ -173,7 +173,6 @@ class MovementPlanner(Node):
         if len(future.result().goals_canceling) > 0:
             self._current_goal_handle = None
             self.get_logger().info("Goal successfully cancelled")
-            self.escape_maze()
         else:
             self.get_logger().error("Failed to cancel the goal")
 
@@ -197,15 +196,20 @@ class MovementPlanner(Node):
         if result.success:
             if self.steps >= len(self.path):
                 self.get_logger().info("Reached the goal successfully!")
+            elif self.steps >2:
+                self.escape_maze()
             else:
                 self.send_goal_to_action_server()
+        elif result.message == "Goal canceled":
+            self.get_logger().info("Goal was canceled, trying to find a new path.")
+            self.escape_maze()
 
     def escape_maze(self):
         start = self.position_to_grid_coordinates(self.robot_pos, self.maze_map)
         goal = self.position_to_grid_coordinates(self.goal_pos, self.maze_map)
         self.get_logger().info(f"Start: {start}, Goal: {goal}")
         path = a_star_weighted_v2(self.maze_map.weighted_cost_map, start, goal, step = 1)
-        self.maze_map.visualize_cost_map(path=path)
+        #self.maze_map.visualize_cost_map(path=path)
         if path is None:
             self.get_logger().error("No path found to the goal.")
             return

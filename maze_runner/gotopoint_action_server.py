@@ -27,7 +27,7 @@ class GoToPointActionServer(Node):
             self,
             GoToPoint,
             "go_to_point",
-            execute_callback=self.execute_callback,
+            execute_callback=self.old_execute_callback,
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
         )
@@ -70,6 +70,8 @@ class GoToPointActionServer(Node):
 
     def cancel_callback(self, goal_handle):
         """Handle goal cancellation."""
+          # Allow time for reverse
+        #return CancelResponse.ACCEPT
         if self._accept_cancel:
             self.get_logger().info("Cancel request accepted")
             return CancelResponse.ACCEPT
@@ -152,8 +154,82 @@ class GoToPointActionServer(Node):
 
         return distance, desired_yaw
     
-
     def execute_callback(self, goal_handle):
+        self.get_logger().info("Executing goal...")
+
+        distance = int(goal_handle.request.x)
+        heading = int(goal_handle.request.y)
+
+        # Wait for initial data
+        self.get_logger().warn("Waiting for gyro rotation and robot pose...")
+        while self.gyro_rotation is None or self.robot_pos is None:
+            time.sleep(0.1)
+
+        target_yaw = self.heading_to_angle(heading)
+        start_x, start_y = self.robot_pos
+        target_distance = distance * RESOLUTION_FACTOR / 100  # cm to meters
+        moved_distance_estimate = 0.0
+        rate = 0.05  # 50Hz
+
+        self._accept_cancel = True
+        while rclpy.ok():
+            if goal_handle.is_cancel_requested:
+                stop_twist = Twist()
+                stop_twist.linear.x = 0.0
+                stop_twist.angular.z = 0.0
+                self._cmd_vel_pub.publish(stop_twist)
+                time.sleep(0.05)  # Allow time for stop command to take effect
+                reverse_twist = Twist()
+                reverse_twist.linear.x = -0.3  # Reverse speed
+                self._cmd_vel_pub.publish(reverse_twist)
+                time.sleep(0.7) 
+                self.get_logger().info("Goal canceled")
+                goal_handle.canceled()
+                return GoToPoint.Result(success=False, message="Goal canceled")
+
+            current_yaw = self.get_local_yaw()
+            if current_yaw is None or self.robot_pos is None:
+                self.get_logger().warn("Waiting for pose or heading...")
+                time.sleep(0.1)
+                continue
+
+            current_x, current_y = self.robot_pos
+            dx = current_x - start_x
+            dy = current_y - start_y
+            moved_distance_pos = math.hypot(dx, dy)
+
+            # Stop conditions
+            if moved_distance_pos >= target_distance:
+                break
+            elif moved_distance_estimate > 3 * moved_distance_pos:
+                if moved_distance_estimate > target_distance:
+                    self.get_logger().info("Using estimated distance to stop.")
+                    break
+
+            # --- Smooth rotation while moving forward ---
+            angle_error = self._angle_diff(target_yaw, current_yaw)
+
+            # Angular velocity proportional to error
+            angular_z = np.clip(-2.0 * angle_error, -1.5, 1.5)
+
+            # Reduce linear speed if angular error is large
+            linear_speed = max(0.3, min(0.5, (target_distance - moved_distance_estimate)* 0.8)) if abs(angle_error) < math.radians(15) else 0.3
+
+            twist = Twist()
+            twist.linear.x = linear_speed
+            twist.angular.z = angular_z
+            self._cmd_vel_pub.publish(twist)
+
+            moved_distance_estimate += twist.linear.x * rate
+            time.sleep(rate)
+
+        # Stop robot
+        self._cmd_vel_pub.publish(Twist())
+        goal_handle.succeed()
+        self.get_logger().info("Goal reached successfully")
+        return GoToPoint.Result(success=True, message="Goal reached")
+
+    def old_execute_callback(self, goal_handle):
         """Main loop that drives robot to target with separate rotation and translation phases."""
         
         
