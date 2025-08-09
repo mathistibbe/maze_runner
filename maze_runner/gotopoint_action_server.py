@@ -260,7 +260,7 @@ class GoToPointActionServer(Node):
             current_yaw = self.get_local_yaw()
             remaining_angle = self._angle_diff(target_yaw, current_yaw)
             
-            if abs(remaining_angle) < math.radians(1):
+            if abs(remaining_angle) < math.radians(2):
                 twist = Twist()
                 self._cmd_vel_pub.publish(twist)
                 time.sleep(0.1)
@@ -270,7 +270,7 @@ class GoToPointActionServer(Node):
             # rotation_direction = remaining_angle / abs(remaining_angle)
             twist = Twist()
             twist.linear.x = 0.0 
-            twist.angular.z = - 0.7 if remaining_angle > 0 else 0.7
+            twist.angular.z = -0.7 if remaining_angle > 0 else 0.7
             self._cmd_vel_pub.publish(twist)
             time.sleep(rate)
 

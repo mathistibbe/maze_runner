@@ -46,6 +46,7 @@ class MovementPlanner(Node):
         self.steps = 0
         self._current_goal_handle = None
         timer_period = 2  # seconds
+
         self.timer = self.create_timer(timer_period, self.test_grid)
 
 
@@ -196,7 +197,7 @@ class MovementPlanner(Node):
         if result.success:
             if self.steps >= len(self.path):
                 self.get_logger().info("Reached the goal successfully!")
-            elif self.steps >2:
+            elif self.steps >3 and len(self.path)-self.steps+1 > 3:
                 self.escape_maze()
             else:
                 self.send_goal_to_action_server()
